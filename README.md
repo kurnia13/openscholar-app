@@ -1,4 +1,4 @@
-# 🎓 OpenScholarHub
+# OpenScholarHub
 > Mesin Pencari Jurnal Akademik Open-Access & Analisis Metode Otomatis
 
 Aplikasi ini dibangun untuk membantu peneliti Indonesia menemukan referensi jurnal gratis (Open Access) dari **CrossRef** dan **DOAJ** tanpa hambatan paywall.
