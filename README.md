@@ -1,25 +1,16 @@
-# OpenScholarHub
-> Mesin Pencari Jurnal Akademik Open-Access & Analisis Metode Otomatis
+# OpenScholarHub v2.0
+Alat pencarian jurnal akademik presisi dengan filter rentang waktu dan audit relevansi otomatis.
 
-Aplikasi ini dibangun untuk membantu peneliti Indonesia menemukan referensi jurnal gratis (Open Access) dari **CrossRef** dan **DOAJ** tanpa hambatan paywall.
+## Cara Menggunakan Strategi "Jaring Lebar"
+Agar hasil pencarian maksimal, jangan masukkan satu kalimat panjang di satu kolom. Gunakan strategi ini:
 
-## Fitur Utama
-* **Multi-Source Search:** Mencari sekaligus ke database global (CrossRef) dan Open Access (DOAJ).
-* **Auto-Method Detection:** Menggunakan NLP sederhana untuk menebak apakah jurnal tersebut *Kuantitatif*, *Kualitatif*, atau *Literature Review*.
-* **Visualisasi Tren:** Menampilkan grafik kenaikan tren topik riset dari tahun ke tahun.
-* **Export Data:** Unduh hasil pencarian ke format CSV untuk diolah di Excel/Mendeley.
+1. **Kolom Topik Utama:** Masukkan tema besar dalam Bahasa Inggris (Contoh: "Digital Marketing").
+2. **Kolom Kata Kunci Spesifik:** Masukkan variabel spesifik riset Anda (Contoh: "MSME, TikTok Shop").
+3. **Filter Tahun:** Sesuaikan dengan kebutuhan (misal: 5 tahun terakhir).
 
-## Teknologi
-Dibuat dengan Python menggunakan:
-* [Streamlit](https://streamlit.io) (Frontend)
-* Plotly (Visualisasi)
-* Pandas (Data Processing)
+Sistem akan mencari artikel tentang "Digital Marketing", lalu memilah mana yang membahas "TikTok Shop" secara spesifik.
 
-## 🚀 Cara Menggunakan
-1.  Buka Aplikasi: [Masukkan Link Streamlit Anda Di Sini]
-2.  Ketik topik riset di sidebar kiri.
-3.  Filter metode penelitian yang diinginkan.
-4.  Unduh hasil dalam bentuk CSV.
-
----
-*Dikembangkan oleh [Riza Kurnia Putra] sebagai alat bantu riset akademik.*
+## Fitur
+* **Smart Link:** Akses langsung ke DOI atau URL PDF.
+* **Relevance Scoring:** Menilai kecocokan artikel berdasarkan kata kunci.
+* **Time Travel:** Filter keras (hard filter) untuk tahun publikasi.
