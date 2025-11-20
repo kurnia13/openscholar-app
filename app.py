@@ -10,45 +10,40 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- FUNGSI KONVERSI KE RIS STANDAR Q1 ---
+# --- FUNGSI KONVERSI RIS (METADATA LENGKAP) ---
 def convert_df_to_ris(df):
     ris_text = ""
     for index, row in df.iterrows():
         ris_text += "TY  - JOUR\n"
         ris_text += f"TI  - {row['Judul']}\n"
         
-        # Penulis
         if row['Penulis'] and row['Penulis'] != "Penulis Tidak Diketahui":
             authors = row['Penulis'].split(",")
             for auth in authors:
                 ris_text += f"AU  - {auth.strip()}\n"
         
-        # Metadata Jurnal Lengkap
-        ris_text += f"JO  - {row['Nama_Jurnal']}\n"
-        ris_text += f"PY  - {row['Tahun']}\n"
-        
+        # Metadata Jurnal
+        if row['Nama_Jurnal']: ris_text += f"JO  - {row['Nama_Jurnal']}\n"
+        if row['Tahun']: ris_text += f"PY  - {row['Tahun']}\n"
         if row['Volume']: ris_text += f"VL  - {row['Volume']}\n"
         if row['Isu']: ris_text += f"IS  - {row['Isu']}\n"
         
-        # Halaman (Start dan End)
+        # Halaman
         if row['Halaman']:
-            pages = row['Halaman'].split('-')
+            pages = str(row['Halaman']).split('-')
             if len(pages) >= 1: ris_text += f"SP  - {pages[0].strip()}\n"
             if len(pages) >= 2: ris_text += f"EP  - {pages[1].strip()}\n"
 
-        # Keywords (Penting untuk Q1)
+        # Keywords
         if row['Keywords']:
             kws = row['Keywords'].split(',')
             for kw in kws:
                 ris_text += f"KW  - {kw.strip()}\n"
         
-        # Abstrak
         if row['Abstrak'] != "Tidak ada abstrak":
-            # Bersihkan newline di abstrak agar tidak merusak format RIS
             clean_abs = row['Abstrak'].replace('\n', ' ').replace('\r', '')
             ris_text += f"AB  - {clean_abs}\n"
             
-        # Link / DOI
         if "doi.org" in row['Link_Akses']:
             doi_clean = row['Link_Akses'].replace("https://doi.org/", "")
             ris_text += f"DO  - {doi_clean}\n"
@@ -109,36 +104,35 @@ class ScholarEngine:
     def fetch_data(self, broad_topic, start_year, end_year, limit):
         results = []
 
-        # 1. CROSSREF API (Updated Select Fields)
+        # 1. CROSSREF API
         try:
             url = "https://api.crossref.org/works"
             filter_str = f"from-pub-date:{start_year}-01-01,until-pub-date:{end_year}-12-31"
-            # Meminta field lengkap: container-title (Jurnal), volume, issue, page, subject (keywords)
             params = {
                 'query.bibliographic': broad_topic,
                 'rows': limit,
                 'filter': filter_str,
-                'select': 'title,author,published-print,DOI,URL,abstract,container-title,volume,issue,page,subject'
+                'select': 'title,author,published-print,published-online,DOI,URL,abstract,container-title,volume,issue,page,subject'
             }
             r = requests.get(url, params=params, headers=self.headers)
             if r.status_code == 200:
                 items = r.json().get('message', {}).get('items', [])
                 for item in items:
+                    # Cek tahun di published-print ATAU published-online
                     year = 0
                     if 'published-print' in item and 'date-parts' in item['published-print']:
                         year = item['published-print']['date-parts'][0][0]
+                    elif 'published-online' in item and 'date-parts' in item['published-online']:
+                        year = item['published-online']['date-parts'][0][0]
                     
                     doi = item.get('DOI')
                     link = f"https://doi.org/{doi}" if doi else item.get('URL', '#')
                     abst = item.get('abstract', 'Tidak ada abstrak').replace('<jats:p>', '').replace('</jats:p>', '')
                     
-                    # Ambil Metadata Jurnal
-                    journal_name = item.get('container-title', ['Jurnal Tidak Diketahui'])[0]
-                    volume = item.get('volume', '')
-                    issue = item.get('issue', '')
-                    pages = item.get('page', '')
-                    keywords = ", ".join(item.get('subject', []))
-
+                    # Metadata Jurnal
+                    container = item.get('container-title', [])
+                    journal_name = container[0] if container else ""
+                    
                     results.append({
                         'Sumber': 'CrossRef',
                         'Tahun': year,
@@ -148,15 +142,15 @@ class ScholarEngine:
                         'Metode': self.detect_method(abst),
                         'Link_Akses': link,
                         'Nama_Jurnal': journal_name,
-                        'Volume': volume,
-                        'Isu': issue,
-                        'Halaman': pages,
-                        'Keywords': keywords
+                        'Volume': item.get('volume', ''),
+                        'Isu': item.get('issue', ''),
+                        'Halaman': item.get('page', ''),
+                        'Keywords': ", ".join(item.get('subject', []))
                     })
         except Exception:
             pass
 
-        # 2. DOAJ API (Updated Parsing Logic)
+        # 2. DOAJ API
         try:
             url = f"https://doaj.org/api/v2/search/articles/{broad_topic}"
             params = {'pageSize': limit, 'page': 1}
@@ -174,15 +168,10 @@ class ScholarEngine:
                         
                         abst = bib.get('abstract', 'Tidak ada abstrak')
                         
-                        # Ambil Metadata Jurnal DOAJ
                         journal_info = bib.get('journal', {})
-                        journal_name = journal_info.get('title', 'DOAJ Journal')
-                        volume = journal_info.get('volume', '')
-                        issue = journal_info.get('number', '')
                         start_p = bib.get('start_page', '')
                         end_p = bib.get('end_page', '')
                         pages = f"{start_p}-{end_p}" if start_p and end_p else start_p
-                        keywords = ", ".join(bib.get('keywords', []))
 
                         results.append({
                             'Sumber': 'DOAJ',
@@ -192,11 +181,11 @@ class ScholarEngine:
                             'Abstrak': abst,
                             'Metode': self.detect_method(abst),
                             'Link_Akses': link,
-                            'Nama_Jurnal': journal_name,
-                            'Volume': volume,
-                            'Isu': issue,
+                            'Nama_Jurnal': journal_info.get('title', ''),
+                            'Volume': journal_info.get('volume', ''),
+                            'Isu': journal_info.get('number', ''),
                             'Halaman': pages,
-                            'Keywords': keywords
+                            'Keywords': ", ".join(bib.get('keywords', []))
                         })
         except Exception:
             pass
@@ -204,8 +193,8 @@ class ScholarEngine:
         return pd.DataFrame(results)
 
 # --- UI / FRONTEND ---
-st.title("OpenScholarHub")
-st.markdown("Mesin Pencari Jurnal Akademik Standar Bibliografi")
+st.title("OpenScholarHub v2.5")
+st.markdown("Mesin Pencari Jurnal Akademik: Hybrid Link & Metadata Lengkap")
 
 with st.sidebar:
     st.header("Parameter Pencarian")
@@ -224,7 +213,7 @@ with st.sidebar:
 
 if btn_search:
     engine = ScholarEngine()
-    with st.spinner("Sedang mengambil metadata lengkap..."):
+    with st.spinner("Sedang mencari data..."):
         df = engine.fetch_data(broad_topic, years[0], years[1], limit)
     
     if not df.empty:
@@ -236,9 +225,12 @@ if btn_search:
             link_gs = []
             link_s2 = []
             for index, row in df.iterrows():
+                # Audit Relevansi
                 full_text = f"{row['Judul']} {row['Abstrak']}"
                 category, score = engine.calculate_relevance(full_text, specific_keywords)
                 relevance_data.append((category, score))
+                
+                # Buat Hybrid Link (KEMBALI ADA)
                 clean_title = row['Judul'].replace('"', '').replace("'", "")
                 link_gs.append(f"https://scholar.google.com/scholar?q={clean_title}")
                 link_s2.append(f"https://www.semanticscholar.org/search?q={clean_title}")
@@ -249,18 +241,19 @@ if btn_search:
             df['Link_S2'] = link_s2
             df = df.sort_values(by=['Skor', 'Tahun'], ascending=[False, False])
             
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Total Artikel", len(df))
-            col2.metric("Sangat Relevan", len(df[df['Skor'] == 1.0]))
-            col3.metric("Dominasi Metode", df['Metode'].mode()[0] if not df['Metode'].empty else "-")
-
-            st.subheader("Hasil Pencarian (Metadata Lengkap)")
+            # Tampilkan Tabel Utama (DENGAN 3 TOMBOL)
+            st.subheader("Hasil Pencarian")
+            
+            # Konfigurasi Kolom: Menampilkan Nama Jurnal juga agar user bisa cek sebelum download
             st.dataframe(
-                df[['Kategori_Relevansi', 'Tahun', 'Judul', 'Nama_Jurnal', 'Volume', 'Link_Akses']],
+                df[['Kategori_Relevansi', 'Tahun', 'Judul', 'Nama_Jurnal', 'Link_Akses', 'Link_GS', 'Link_S2']],
                 column_config={
-                    "Link_Akses": st.column_config.LinkColumn("Akses", display_text="Buka"),
+                    "Link_Akses": st.column_config.LinkColumn("Akses Utama", display_text="Buka Artikel"),
+                    "Link_GS": st.column_config.LinkColumn("G.Scholar", display_text="Cek GS"),
+                    "Link_S2": st.column_config.LinkColumn("S.Scholar", display_text="Cek S2"),
                     "Judul": st.column_config.TextColumn("Judul", width="medium"),
                     "Nama_Jurnal": st.column_config.TextColumn("Jurnal", width="small"),
+                    "Kategori_Relevansi": st.column_config.TextColumn("Relevansi", width="small"),
                 },
                 use_container_width=True,
                 hide_index=True
@@ -272,8 +265,20 @@ if btn_search:
             csv = df.to_csv(index=False).encode('utf-8')
             d_col1.download_button("Download Tabel (CSV)", csv, f"OpenScholar_{broad_topic}.csv", "text/csv", use_container_width=True)
             
-            # GENERATOR RIS V2.4 (FIXED)
+            # RIS GENERATOR (METADATA LENGKAP)
             ris_data = convert_df_to_ris(df)
             d_col2.download_button("Download Sitasi Lengkap (.ris)", ris_data, f"OpenScholar_{broad_topic}.ris", "application/x-research-info-systems", use_container_width=True)
+            
+            with st.expander("Lihat Analisis Visual"):
+                tab1, tab2 = st.tabs(["Tren Waktu", "Distribusi Metode"])
+                with tab1:
+                    trend = df.groupby('Tahun').size().reset_index(name='Jumlah')
+                    fig = px.line(trend, x='Tahun', y='Jumlah', title='Tren Publikasi')
+                    st.plotly_chart(fig, use_container_width=True)
+                with tab2:
+                    dist = df['Metode'].value_counts().reset_index()
+                    dist.columns = ['Metode', 'Jumlah']
+                    fig2 = px.pie(dist, names='Metode', values='Jumlah', title='Proporsi Metode Penelitian')
+                    st.plotly_chart(fig2, use_container_width=True)
     else:
         st.warning("Tidak ditemukan artikel.")
