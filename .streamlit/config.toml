@@ -1,0 +1,15 @@
+[theme]
+# Tech Blue primary color (mirip gaya Stripe/Google) untuk tombol dan link
+primaryColor="#2563EB"
+
+# Latar belakang putih bersih
+backgroundColor="#FFFFFF"
+
+# Latar belakang sidebar abu-abu sangat terang
+secondaryBackgroundColor="#F8FAFC"
+
+# Warna teks abu-abu tua (lebih nyaman di mata daripada hitam pekat)
+textColor="#1E293B"
+
+# Font modern standar
+font="sans serif"
