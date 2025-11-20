@@ -7,160 +7,227 @@ from datetime import datetime
 # --- KONFIGURASI HALAMAN ---
 st.set_page_config(
     page_title="OpenScholarHub",
-    page_icon="🎓",
     layout="wide"
 )
 
-# --- CLASS LOGIKA PENCARIAN (BACKEND) ---
+# --- CLASS LOGIKA UTAMA ---
 class ScholarEngine:
     def __init__(self):
+        # Identitas bot agar tidak diblokir server
         self.headers = {'User-Agent': 'OpenScholarBot/WebVersion (mailto:researcher@example.com)'}
 
     def normalize_authors(self, author_list):
-        if not author_list: return "Unknown Author"
+        """Membersihkan nama penulis menjadi format teks standar"""
+        if not author_list: return "Penulis Tidak Diketahui"
         names = []
         for auth in author_list:
             if isinstance(auth, dict):
-                if 'given' in auth and 'family' in auth: names.append(f"{auth['given']} {auth['family']}")
-                elif 'name' in auth: names.append(auth['name'])
-            elif isinstance(auth, str): names.append(auth)
+                if 'given' in auth and 'family' in auth:
+                    names.append(f"{auth['given']} {auth['family']}")
+                elif 'name' in auth:
+                    names.append(auth['name'])
+            elif isinstance(auth, str):
+                names.append(auth)
         return ", ".join(names[:3])
 
-    def detect_method(self, text):
-        if not text or text == "No Abstract": return "Unspecified"
-        text_lower = text.lower()
-        quant = sum(1 for w in ['survey', 'statistical', 'regression', 'quantitative', 'p-value'] if w in text_lower)
-        qual = sum(1 for w in ['interview', 'case study', 'thematic', 'qualitative', 'ethnography'] if w in text_lower)
-        review = sum(1 for w in ['systematic review', 'literature review', 'meta-analysis'] if w in text_lower)
+    def calculate_relevance(self, text, keywords):
+        """
+        Menghitung skor relevansi berdasarkan ketersediaan kata kunci spesifik
+        di dalam abstrak atau judul.
+        """
+        if not keywords:
+            return "Umum", 0
+            
+        text_lower = text.lower() if text else ""
+        keyword_list = [k.strip().lower() for k in keywords.split(",") if k.strip()]
         
-        if review > 0 and review >= quant: return "Literature Review"
-        if quant > qual: return "Quantitative"
-        if qual > quant: return "Qualitative"
-        return "Mixed/General"
+        if not keyword_list:
+            return "Umum", 0
 
-    # Cache data agar tidak request ulang saat klik filter
-    @st.cache_data
-    def fetch_data(_self, query, limit):
-        # 1. CrossRef
-        cr_results = []
+        # Hitung berapa kata kunci yang muncul
+        found_count = sum(1 for k in keyword_list if k in text_lower)
+        score = found_count / len(keyword_list)
+
+        if score == 1.0:
+            return "Sangat Relevan (Cocok Sempurna)", score
+        elif score >= 0.5:
+            return "Relevan (Sebagian Cocok)", score
+        elif score > 0:
+            return "Terkait (Sedikit Cocok)", score
+        else:
+            return "Topik Luas (Hanya Judul)", score
+
+    def fetch_data(self, broad_topic, start_year, end_year, limit):
+        """
+        Mengambil data dari CrossRef dan DOAJ dengan filter tahun langsung.
+        """
+        results = []
+
+        # 1. CROSSREF API
+        # Filter rentang tanggal di level API untuk efisiensi
         try:
             url = "https://api.crossref.org/works"
-            params = {'query.bibliographic': query, 'rows': limit, 'select': 'title,author,published-print,DOI,abstract'}
-            r = requests.get(url, params=params, headers=_self.headers)
+            filter_str = f"from-pub-date:{start_year}-01-01,until-pub-date:{end_year}-12-31"
+            params = {
+                'query.bibliographic': broad_topic,
+                'rows': limit,
+                'filter': filter_str,
+                'select': 'title,author,published-print,DOI,URL,abstract'
+            }
+            r = requests.get(url, params=params, headers=self.headers)
             if r.status_code == 200:
-                for item in r.json()['message']['items']:
-                    abst = item.get('abstract', 'No Abstract').replace('<jats:p>', '').replace('</jats:p>', '')
-                    cr_results.append({
-                        'Source': 'CrossRef',
-                        'Title': item.get('title', ['No Title'])[0],
-                        'Authors': _self.normalize_authors(item.get('author', [])),
-                        'Year': item['published-print']['date-parts'][0][0] if 'published-print' in item else 0,
-                        'Method': _self.detect_method(abst),
-                        'Abstract': abst[:200] + "..."
+                items = r.json().get('message', {}).get('items', [])
+                for item in items:
+                    year = 0
+                    if 'published-print' in item and 'date-parts' in item['published-print']:
+                        year = item['published-print']['date-parts'][0][0]
+                    
+                    # Prioritas Link: DOI > URL
+                    doi = item.get('DOI')
+                    link = f"https://doi.org/{doi}" if doi else item.get('URL', '#')
+                    
+                    results.append({
+                        'Sumber': 'CrossRef',
+                        'Tahun': year,
+                        'Judul': item.get('title', ['Tanpa Judul'])[0],
+                        'Penulis': self.normalize_authors(item.get('author', [])),
+                        'Abstrak': item.get('abstract', 'Tidak ada abstrak').replace('<jats:p>', '').replace('</jats:p>', ''),
+                        'Link_Akses': link
                     })
-        except: pass
+        except Exception as e:
+            pass # Lanjut jika error koneksi
 
-        # 2. DOAJ
-        doaj_results = []
+        # 2. DOAJ API
+        # DOAJ tidak punya filter tanggal di URL search standar, filter dilakukan manual nanti
         try:
-            url = f"https://doaj.org/api/v2/search/articles/{query}"
-            r = requests.get(url, params={'pageSize': limit, 'page': 1})
+            url = f"https://doaj.org/api/v2/search/articles/{broad_topic}"
+            params = {'pageSize': limit, 'page': 1}
+            r = requests.get(url, params=params)
             if r.status_code == 200:
-                for item in r.json().get('results', []):
+                items = r.json().get('results', [])
+                for item in items:
                     bib = item.get('bibjson', {})
-                    abst = bib.get('abstract', 'No Abstract')
-                    doaj_results.append({
-                        'Source': 'DOAJ',
-                        'Title': bib.get('title', 'No Title'),
-                        'Authors': _self.normalize_authors(bib.get('author', [])),
-                        'Year': int(bib.get('year', 0)),
-                        'Method': _self.detect_method(abst),
-                        'Abstract': abst[:200] + "..."
-                    })
-        except: pass
-        
-        return pd.DataFrame(cr_results + doaj_results)
+                    year = int(bib.get('year', 0))
+                    
+                    # Filter Tahun Manual untuk DOAJ
+                    if start_year <= year <= end_year:
+                        # Link DOAJ biasanya langsung full text
+                        link = bib.get('link', [{'url': '#'}])[0].get('url')
+                        # Jika tidak ada link spesifik, gunakan link ID DOAJ
+                        if not link or link == '#':
+                            link = f"https://doaj.org/article/{item.get('id')}"
+
+                        results.append({
+                            'Sumber': 'DOAJ',
+                            'Tahun': year,
+                            'Judul': bib.get('title', 'Tanpa Judul'),
+                            'Penulis': self.normalize_authors(bib.get('author', [])),
+                            'Abstrak': bib.get('abstract', 'Tidak ada abstrak'),
+                            'Link_Akses': link
+                        })
+        except Exception as e:
+            pass
+
+        return pd.DataFrame(results)
 
 # --- UI / FRONTEND ---
-st.title("🎓 OpenScholarHub")
-st.markdown("Mesin pencari jurnal **gratis & open-access** dengan deteksi metode otomatis.")
+st.title("OpenScholarHub")
+st.markdown("Mesin Pencari Jurnal Akademik Terintegrasi")
 
-# Sidebar untuk Input
+# Sidebar Panel Kontrol
 with st.sidebar:
-    st.header("🔍 Panel Kontrol")
-    query = st.text_input("Topik Riset", "Artificial Intelligence in Education")
-    limit_per_source = st.slider("Jumlah Sampel per Sumber", 5, 50, 10)
-    st.markdown("---")
-    filter_method = st.multiselect(
-        "Filter Metode", 
-        ['Quantitative', 'Qualitative', 'Literature Review', 'Mixed/General'],
-        default=['Quantitative', 'Qualitative', 'Literature Review', 'Mixed/General']
-    )
-    search_btn = st.button("Mulai Pencarian", type="primary")
-
-# Logika Utama
-if search_btn:
-    engine = ScholarEngine()
-    with st.spinner(f"Sedang mencari artikel tentang '{query}'..."):
-        df = engine.fetch_data(query, limit_per_source)
+    st.header("Parameter Pencarian")
     
-    # ... (kode di atas biarkan sama) ...
+    # Input 1: Topik Luas (Untuk API)
+    broad_topic = st.text_input("Topik Utama (Bahasa Inggris)", "Islamic Economic Partnership")
+    st.caption("Gunakan istilah umum untuk menarik data dari server.")
+    
+    # Input 2: Kata Kunci Spesifik (Untuk Audit Relevansi)
+    specific_keywords = st.text_input("Kata Kunci Spesifik (Wajib Ada)", "Syirkah, Integration, MSME")
+    st.caption("Pisahkan dengan koma. Artikel akan dinilai berdasarkan kata-kata ini.")
+    
+    st.markdown("---")
+    
+    # Input 3: Rentang Waktu
+    current_year = datetime.now().year
+    years = st.slider(
+        "Rentang Tahun Publikasi",
+        min_value=2000,
+        max_value=current_year,
+        value=(current_year-5, current_year)
+    )
+    
+    limit = st.number_input("Jumlah Sampel per Sumber", min_value=5, max_value=100, value=20)
+    
+    btn_search = st.button("Cari Artikel", type="primary")
+
+# Logika Eksekusi
+if btn_search:
+    engine = ScholarEngine()
+    
+    with st.spinner("Sedang menghubungi server jurnal..."):
+        # 1. Ambil Data
+        df = engine.fetch_data(broad_topic, years[0], years[1], limit)
     
     if not df.empty:
-        # Cleaning: Pastikan tahun valid
-        df['Year'] = pd.to_numeric(df['Year'], errors='coerce').fillna(0).astype(int)
+        # 2. Proses Audit Keyword & Relevansi
+        relevance_data = []
+        for index, row in df.iterrows():
+            # Gabungkan Judul dan Abstrak untuk pencarian keyword
+            full_text = f"{row['Judul']} {row['Abstrak']}"
+            category, score = engine.calculate_relevance(full_text, specific_keywords)
+            relevance_data.append((category, score))
         
-        # Filter 1: Hapus data dengan tahun 0 (tidak valid)
-        df_clean = df[df['Year'] > 1900]
+        # Masukkan hasil audit ke DataFrame
+        df['Kategori_Relevansi'] = [x[0] for x in relevance_data]
+        df['Skor'] = [x[1] for x in relevance_data]
+        
+        # 3. Sorting: Urutkan berdasarkan Skor tertinggi, lalu Tahun terbaru
+        df = df.sort_values(by=['Skor', 'Tahun'], ascending=[False, False])
+        
+        # Tampilkan Metrik
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Total Artikel Ditemukan", len(df))
+        col1.metric("Rentang Tahun", f"{years[0]} - {years[1]}")
+        
+        # Hitung artikel yang 'Sangat Relevan'
+        perfect_matches = len(df[df['Skor'] == 1.0])
+        col2.metric("Artikel Sangat Relevan", perfect_matches)
 
-        # --- PENGECEKAN GANDA (BUG FIX) ---
-        if df_clean.empty:
-            st.warning("⚠️ Artikel ditemukan dari API, namun tidak memiliki data TAHUN yang valid sehingga tidak dapat ditampilkan dalam grafik.")
-            # Tampilkan data mentah saja agar user tidak bingung
-            st.write("Data Mentah (Tanpa Tahun):")
-            st.dataframe(df)
-        else:
-            # Filter 2: Berdasarkan Metode (Pilihan User)
-            df_filtered = df_clean[df_clean['Method'].isin(filter_method)]
+        # 4. Tampilkan Tabel Data
+        st.subheader("Hasil Pencarian")
+        
+        # Konfigurasi Kolom agar Link bisa diklik dan Tampilan rapi
+        st.dataframe(
+            df[['Kategori_Relevansi', 'Tahun', 'Judul', 'Penulis', 'Sumber', 'Link_Akses']],
+            column_config={
+                "Link_Akses": st.column_config.LinkColumn(
+                    "Akses Naskah",
+                    help="Klik untuk membuka artikel di website penerbit",
+                    validate="^https://",
+                    display_text="Buka Artikel"
+                ),
+                "Judul": st.column_config.TextColumn("Judul Artikel", width="medium"),
+                "Kategori_Relevansi": st.column_config.TextColumn("Tingkat Relevansi", width="small"),
+            },
+            use_container_width=True,
+            hide_index=True
+        )
+        
+        # 5. Visualisasi (Opsional)
+        with st.expander("Lihat Analisis Visual"):
+            tab1, tab2 = st.tabs(["Tren Waktu", "Distribusi Relevansi"])
             
-            if df_filtered.empty:
-                st.warning("⚠️ Tidak ada artikel yang cocok dengan Filter Metode yang Anda pilih.")
-            else:
-                # Statistik Ringkas
-                col1, col2 = st.columns(2)
-                col1.metric("Total Artikel Valid", f"{len(df_filtered)} Judul")
-                
-                # Mencari Modus (Nilai terbanyak) dengan aman
-                try:
-                    top_source = df_filtered['Source'].mode().iloc[0]
-                except:
-                    top_source = "-"
-                col2.metric("Sumber Terbanyak", top_source)
-                
-                # Visualisasi
-                tab1, tab2 = st.tabs(["📊 Visualisasi Tren", "📄 Data Tabel"])
-                
-                with tab1:
-                    c1, c2 = st.columns(2)
-                    # Grafik Tren
-                    trend = df_filtered.groupby('Year').size().reset_index(name='Count')
-                    fig_line = px.line(trend, x='Year', y='Count', title='Tren Publikasi', markers=True)
-                    c1.plotly_chart(fig_line, use_container_width=True)
-                    
-                    # Grafik Donut
-                    fig_pie = px.pie(df_filtered, names='Method', title='Distribusi Metode', hole=0.4)
-                    c2.plotly_chart(fig_pie, use_container_width=True)
-                    
-                with tab2:
-                    st.dataframe(df_filtered[['Year', 'Source', 'Method', 'Title', 'Authors']], use_container_width=True)
-                    
-                    # Fitur Download CSV
-                    csv = df_filtered.to_csv(index=False).encode('utf-8')
-                    st.download_button(
-                        label="📥 Download Hasil (CSV)",
-                        data=csv,
-                        file_name=f"OpenScholar_{query}.csv",
-                        mime="text/csv"
-                    )
+            with tab1:
+                trend = df.groupby('Tahun').size().reset_index(name='Jumlah')
+                fig = px.line(trend, x='Tahun', y='Jumlah', title='Tren Publikasi per Tahun')
+                st.plotly_chart(fig, use_container_width=True)
+            
+            with tab2:
+                dist = df['Kategori_Relevansi'].value_counts().reset_index()
+                dist.columns = ['Kategori', 'Jumlah']
+                fig2 = px.pie(dist, names='Kategori', values='Jumlah', title='Proporsi Relevansi Artikel')
+                st.plotly_chart(fig2, use_container_width=True)
+
     else:
-        st.error("Tidak ditemukan artikel dari sumber manapun. Coba periksa ejaan atau ganti topik.")
+        st.warning("Tidak ditemukan artikel dalam rentang tahun dan topik tersebut.")
