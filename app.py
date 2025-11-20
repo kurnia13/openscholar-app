@@ -13,11 +13,9 @@ st.set_page_config(
 # --- CLASS LOGIKA UTAMA ---
 class ScholarEngine:
     def __init__(self):
-        # Identitas bot agar tidak diblokir server
         self.headers = {'User-Agent': 'OpenScholarBot/WebVersion (mailto:researcher@example.com)'}
 
     def normalize_authors(self, author_list):
-        """Membersihkan nama penulis menjadi format teks standar"""
         if not author_list: return "Penulis Tidak Diketahui"
         names = []
         for auth in author_list:
@@ -31,10 +29,6 @@ class ScholarEngine:
         return ", ".join(names[:3])
 
     def calculate_relevance(self, text, keywords):
-        """
-        Menghitung skor relevansi berdasarkan ketersediaan kata kunci spesifik
-        di dalam abstrak atau judul.
-        """
         if not keywords:
             return "Umum", 0
             
@@ -44,27 +38,22 @@ class ScholarEngine:
         if not keyword_list:
             return "Umum", 0
 
-        # Hitung berapa kata kunci yang muncul
         found_count = sum(1 for k in keyword_list if k in text_lower)
         score = found_count / len(keyword_list)
 
         if score == 1.0:
-            return "Sangat Relevan (Cocok Sempurna)", score
+            return "Sangat Relevan", score
         elif score >= 0.5:
-            return "Relevan (Sebagian Cocok)", score
+            return "Relevan", score
         elif score > 0:
-            return "Terkait (Sedikit Cocok)", score
+            return "Terkait", score
         else:
-            return "Topik Luas (Hanya Judul)", score
+            return "Topik Luas", score
 
     def fetch_data(self, broad_topic, start_year, end_year, limit):
-        """
-        Mengambil data dari CrossRef dan DOAJ dengan filter tahun langsung.
-        """
         results = []
 
         # 1. CROSSREF API
-        # Filter rentang tanggal di level API untuk efisiensi
         try:
             url = "https://api.crossref.org/works"
             filter_str = f"from-pub-date:{start_year}-01-01,until-pub-date:{end_year}-12-31"
@@ -82,7 +71,6 @@ class ScholarEngine:
                     if 'published-print' in item and 'date-parts' in item['published-print']:
                         year = item['published-print']['date-parts'][0][0]
                     
-                    # Prioritas Link: DOI > URL
                     doi = item.get('DOI')
                     link = f"https://doi.org/{doi}" if doi else item.get('URL', '#')
                     
@@ -94,11 +82,10 @@ class ScholarEngine:
                         'Abstrak': item.get('abstract', 'Tidak ada abstrak').replace('<jats:p>', '').replace('</jats:p>', ''),
                         'Link_Akses': link
                     })
-        except Exception as e:
-            pass # Lanjut jika error koneksi
+        except Exception:
+            pass
 
         # 2. DOAJ API
-        # DOAJ tidak punya filter tanggal di URL search standar, filter dilakukan manual nanti
         try:
             url = f"https://doaj.org/api/v2/search/articles/{broad_topic}"
             params = {'pageSize': limit, 'page': 1}
@@ -109,11 +96,8 @@ class ScholarEngine:
                     bib = item.get('bibjson', {})
                     year = int(bib.get('year', 0))
                     
-                    # Filter Tahun Manual untuk DOAJ
                     if start_year <= year <= end_year:
-                        # Link DOAJ biasanya langsung full text
                         link = bib.get('link', [{'url': '#'}])[0].get('url')
-                        # Jika tidak ada link spesifik, gunakan link ID DOAJ
                         if not link or link == '#':
                             link = f"https://doaj.org/article/{item.get('id')}"
 
@@ -125,7 +109,7 @@ class ScholarEngine:
                             'Abstrak': bib.get('abstract', 'Tidak ada abstrak'),
                             'Link_Akses': link
                         })
-        except Exception as e:
+        except Exception:
             pass
 
         return pd.DataFrame(results)
@@ -134,21 +118,17 @@ class ScholarEngine:
 st.title("OpenScholarHub")
 st.markdown("Mesin Pencari Jurnal Akademik Terintegrasi")
 
-# Sidebar Panel Kontrol
 with st.sidebar:
     st.header("Parameter Pencarian")
     
-    # Input 1: Topik Luas (Untuk API)
     broad_topic = st.text_input("Topik Utama (Bahasa Inggris)", "Islamic Economic Partnership")
     st.caption("Gunakan istilah umum untuk menarik data dari server.")
     
-    # Input 2: Kata Kunci Spesifik (Untuk Audit Relevansi)
-    specific_keywords = st.text_input("Kata Kunci Spesifik (Wajib Ada)", "Syirkah, Integration, MSME")
-    st.caption("Pisahkan dengan koma. Artikel akan dinilai berdasarkan kata-kata ini.")
+    specific_keywords = st.text_input("Kata Kunci Spesifik", "Syirkah, Integration")
+    st.caption("Pisahkan dengan koma untuk audit relevansi.")
     
     st.markdown("---")
     
-    # Input 3: Rentang Waktu
     current_year = datetime.now().year
     years = st.slider(
         "Rentang Tahun Publikasi",
@@ -161,60 +141,72 @@ with st.sidebar:
     
     btn_search = st.button("Cari Artikel", type="primary")
 
-# Logika Eksekusi
 if btn_search:
     engine = ScholarEngine()
     
-    with st.spinner("Sedang menghubungi server jurnal..."):
-        # 1. Ambil Data
+    with st.spinner("Sedang mencari data..."):
         df = engine.fetch_data(broad_topic, years[0], years[1], limit)
     
     if not df.empty:
-        # 2. Proses Audit Keyword & Relevansi
+        # Audit Relevansi
         relevance_data = []
+        link_gs = []
+        link_s2 = []
+
         for index, row in df.iterrows():
-            # Gabungkan Judul dan Abstrak untuk pencarian keyword
+            # Hitung Skor
             full_text = f"{row['Judul']} {row['Abstrak']}"
             category, score = engine.calculate_relevance(full_text, specific_keywords)
             relevance_data.append((category, score))
+            
+            # Buat Link Hybrid (GS & S2)
+            clean_title = row['Judul'].replace('"', '').replace("'", "")
+            link_gs.append(f"https://scholar.google.com/scholar?q={clean_title}")
+            link_s2.append(f"https://www.semanticscholar.org/search?q={clean_title}")
         
-        # Masukkan hasil audit ke DataFrame
         df['Kategori_Relevansi'] = [x[0] for x in relevance_data]
         df['Skor'] = [x[1] for x in relevance_data]
+        df['Link_GS'] = link_gs
+        df['Link_S2'] = link_s2
         
-        # 3. Sorting: Urutkan berdasarkan Skor tertinggi, lalu Tahun terbaru
+        # Sorting
         df = df.sort_values(by=['Skor', 'Tahun'], ascending=[False, False])
         
         # Tampilkan Metrik
         col1, col2, col3 = st.columns(3)
-        col1.metric("Total Artikel Ditemukan", len(df))
+        col1.metric("Total Ditemukan", len(df))
         col1.metric("Rentang Tahun", f"{years[0]} - {years[1]}")
-        
-        # Hitung artikel yang 'Sangat Relevan'
         perfect_matches = len(df[df['Skor'] == 1.0])
-        col2.metric("Artikel Sangat Relevan", perfect_matches)
+        col2.metric("Sangat Relevan", perfect_matches)
 
-        # 4. Tampilkan Tabel Data
+        # Tampilkan Tabel Utama
         st.subheader("Hasil Pencarian")
         
-        # Konfigurasi Kolom agar Link bisa diklik dan Tampilan rapi
         st.dataframe(
-            df[['Kategori_Relevansi', 'Tahun', 'Judul', 'Penulis', 'Sumber', 'Link_Akses']],
+            df[['Kategori_Relevansi', 'Tahun', 'Judul', 'Link_Akses', 'Link_GS', 'Link_S2']],
             column_config={
                 "Link_Akses": st.column_config.LinkColumn(
-                    "Akses Naskah",
-                    help="Klik untuk membuka artikel di website penerbit",
-                    validate="^https://",
+                    "Akses Utama",
+                    help="Link ke Publisher atau PDF",
                     display_text="Buka Artikel"
                 ),
+                "Link_GS": st.column_config.LinkColumn(
+                    "Google Scholar",
+                    help="Cari PDF di Google Scholar",
+                    display_text="Cek GS"
+                ),
+                "Link_S2": st.column_config.LinkColumn(
+                    "Semantic Scholar",
+                    help="Lihat sitasi di Semantic Scholar",
+                    display_text="Cek S2"
+                ),
                 "Judul": st.column_config.TextColumn("Judul Artikel", width="medium"),
-                "Kategori_Relevansi": st.column_config.TextColumn("Tingkat Relevansi", width="small"),
+                "Kategori_Relevansi": st.column_config.TextColumn("Relevansi", width="small"),
             },
             use_container_width=True,
             hide_index=True
         )
         
-        # 5. Visualisasi (Opsional)
         with st.expander("Lihat Analisis Visual"):
             tab1, tab2 = st.tabs(["Tren Waktu", "Distribusi Relevansi"])
             
