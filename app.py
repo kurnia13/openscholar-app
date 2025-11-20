@@ -104,43 +104,63 @@ if search_btn:
     with st.spinner(f"Sedang mencari artikel tentang '{query}'..."):
         df = engine.fetch_data(query, limit_per_source)
     
+    # ... (kode di atas biarkan sama) ...
+    
     if not df.empty:
-        # Cleaning & Filtering
+        # Cleaning: Pastikan tahun valid
         df['Year'] = pd.to_numeric(df['Year'], errors='coerce').fillna(0).astype(int)
-        df = df[df['Year'] > 1900] # Hapus tahun error
-        df_filtered = df[df['Method'].isin(filter_method)]
         
-        # Statistik Ringkas
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Total Ditemukan", f"{len(df)} Artikel")
-        col1.metric("Setelah Filter", f"{len(df_filtered)} Artikel")
-        top_source = df['Source'].mode()[0]
-        col2.metric("Sumber Terbanyak", top_source)
-        
-        # Visualisasi (Langsung muncul otomatis)
-        tab1, tab2 = st.tabs(["📊 Visualisasi Tren", "📄 Data Tabel"])
-        
-        with tab1:
-            c1, c2 = st.columns(2)
-            # Grafik Tren
-            trend = df_filtered.groupby('Year').size().reset_index(name='Count')
-            fig_line = px.line(trend, x='Year', y='Count', title='Tren Publikasi', markers=True)
-            c1.plotly_chart(fig_line, use_container_width=True)
+        # Filter 1: Hapus data dengan tahun 0 (tidak valid)
+        df_clean = df[df['Year'] > 1900]
+
+        # --- PENGECEKAN GANDA (BUG FIX) ---
+        if df_clean.empty:
+            st.warning("⚠️ Artikel ditemukan dari API, namun tidak memiliki data TAHUN yang valid sehingga tidak dapat ditampilkan dalam grafik.")
+            # Tampilkan data mentah saja agar user tidak bingung
+            st.write("Data Mentah (Tanpa Tahun):")
+            st.dataframe(df)
+        else:
+            # Filter 2: Berdasarkan Metode (Pilihan User)
+            df_filtered = df_clean[df_clean['Method'].isin(filter_method)]
             
-            # Grafik Donut
-            fig_pie = px.pie(df_filtered, names='Method', title='Distribusi Metode', hole=0.4)
-            c2.plotly_chart(fig_pie, use_container_width=True)
-            
-        with tab2:
-            st.dataframe(df_filtered[['Year', 'Source', 'Method', 'Title', 'Authors']], use_container_width=True)
-            
-            # Fitur Download CSV
-            csv = df_filtered.to_csv(index=False).encode('utf-8')
-            st.download_button(
-                label="📥 Download Hasil (CSV)",
-                data=csv,
-                file_name=f"OpenScholar_{query}.csv",
-                mime="text/csv"
-            )
+            if df_filtered.empty:
+                st.warning("⚠️ Tidak ada artikel yang cocok dengan Filter Metode yang Anda pilih.")
+            else:
+                # Statistik Ringkas
+                col1, col2 = st.columns(2)
+                col1.metric("Total Artikel Valid", f"{len(df_filtered)} Judul")
+                
+                # Mencari Modus (Nilai terbanyak) dengan aman
+                try:
+                    top_source = df_filtered['Source'].mode().iloc[0]
+                except:
+                    top_source = "-"
+                col2.metric("Sumber Terbanyak", top_source)
+                
+                # Visualisasi
+                tab1, tab2 = st.tabs(["📊 Visualisasi Tren", "📄 Data Tabel"])
+                
+                with tab1:
+                    c1, c2 = st.columns(2)
+                    # Grafik Tren
+                    trend = df_filtered.groupby('Year').size().reset_index(name='Count')
+                    fig_line = px.line(trend, x='Year', y='Count', title='Tren Publikasi', markers=True)
+                    c1.plotly_chart(fig_line, use_container_width=True)
+                    
+                    # Grafik Donut
+                    fig_pie = px.pie(df_filtered, names='Method', title='Distribusi Metode', hole=0.4)
+                    c2.plotly_chart(fig_pie, use_container_width=True)
+                    
+                with tab2:
+                    st.dataframe(df_filtered[['Year', 'Source', 'Method', 'Title', 'Authors']], use_container_width=True)
+                    
+                    # Fitur Download CSV
+                    csv = df_filtered.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        label="📥 Download Hasil (CSV)",
+                        data=csv,
+                        file_name=f"OpenScholar_{query}.csv",
+                        mime="text/csv"
+                    )
     else:
-        st.error("Tidak ditemukan artikel. Coba kata kunci lain.")
+        st.error("Tidak ditemukan artikel dari sumber manapun. Coba periksa ejaan atau ganti topik.")
