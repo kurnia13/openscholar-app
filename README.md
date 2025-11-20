@@ -1,4 +1,4 @@
-# OpenScholarHub v2.0
+# OpenScholarHub
 Alat pencarian jurnal akademik presisi dengan filter rentang waktu dan audit relevansi otomatis.
 
 ## Cara Menggunakan Strategi "Jaring Lebar"
